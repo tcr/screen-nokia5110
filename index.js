@@ -11,6 +11,7 @@ var blacklight = port.gpio(4).output().high();
 var BLACK = 1
 var WHITE = 0
 
+// Screen is six rows (pages) with each byte being eight vertical pixels.
 var LCDWIDTH = 84
 var LCDHEIGHT = 48
 
@@ -104,8 +105,9 @@ exports.connect = function (next)
     if ((x < 0) || (x >= LCDWIDTH) || (y < 0) || (y >= LCDHEIGHT))
       return;
 
-    // x is which column
-    var col = x+ (y/8)*LCDWIDTH;
+    // Get the byte we're writing to.
+    // Screen is structured as six rows (pages).
+    var col = x + (((y/8)*LCDWIDTH) | 0);
     if (color) 
       pcd8544_buffer[col] = pcd8544_buffer[col] | (1 << (y%8)); 
     else
@@ -178,6 +180,7 @@ exports.connect = function (next)
     buffer: pcd8544_buffer,
     setBuffer: function (buf) {
       pcd8544_buffer = buf;
+      ret.buffer = buf;
     },
     getPixel: getPixel,
     setPixel: setPixel,
