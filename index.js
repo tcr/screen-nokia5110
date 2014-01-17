@@ -47,7 +47,7 @@ exports.connect = function (next)
 
   var spi = new port.SPI({
     clockSpeed: 4 * 1000000,
-    dataMode: tessel.SPIDataMode.Mode0
+    dataMode: 0
   });
 
   function command (b) {
