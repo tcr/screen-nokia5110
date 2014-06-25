@@ -1,11 +1,6 @@
 var tessel = require('tessel');
 var fs = require('fs');
-
-var port = tessel.port('gpio');
-var rst = port.gpio(1).output().low();
-var cs = port.gpio(2).output().low();
-var dc = port.gpio(3).output().low();
-var blacklight = port.gpio(4).output().high();
+var Queue = require('sync-queue')
 
 
 var BLACK = 1
@@ -35,8 +30,32 @@ var PCD8544_SETTEMP = 0x04
 var PCD8544_SETBIAS = 0x10
 var PCD8544_SETVOP = 0x80
 
-exports.connect = function (next)
+// the most basic function, set a single pixel
+function setScreenPixel (buffer, x, y, color) {
+  x = x | 0;
+  y = y | 0;
+  if ((x < 0) || (x >= LCDWIDTH) || (y < 0) || (y >= LCDHEIGHT))
+    return false;
+
+  // Get the byte we're writing to.
+  // Screen is structured as six rows (pages).
+  var pixel = (Math.floor(y / 8)*8 * LCDWIDTH) + (x * 8) + (y % 8);
+  var byte = Math.floor(pixel / 8);
+  var mask = 1 << (pixel % 8);
+  if (color) {
+    buffer[byte] = buffer[byte] | mask;
+  } else {
+    // buffer[col] = buffer[col] & ~(1 << (y%8));
+  }
+  return true;
+}
+
+exports.use = function (port, next)
 {
+  var cs = port.digital[0].output().low();
+  var dc = port.digital[1].output().low();
+  var blacklight = port.digital[2].output().high();
+
   var pcd8544_buffer = new Buffer(LCDWIDTH * LCDHEIGHT / 8);
   pcd8544_buffer.fill(0);
 
@@ -46,74 +65,62 @@ exports.connect = function (next)
     xUpdateMax = 0;
 
   var spi = new port.SPI({
-    clockSpeed: 4 * 1000000,
+    clockSpeed: 8 * 1000000,
     dataMode: 0
   });
 
-  function command (b) {
+  function command (b, next) {
     dc.low();
     cs.low();
-    spi.transferSync(([b]))
-    cs.high();
+    spi.send(new Buffer([b]), function () {
+      cs.high();
+      next();
+    });
   }
 
   function main () {
-    rst.low();
-    setTimeout(mainReset, 0);
-  }
-
-  function mainReset () {
-    rst.high();
+    // rst.high();
 
     // get into the EXTENDED mode!
-    command(PCD8544_FUNCTIONSET | PCD8544_EXTENDEDINSTRUCTION );
+    command(PCD8544_FUNCTIONSET | PCD8544_EXTENDEDINSTRUCTION, function () {
 
-    // LCD bias select (4 is optimal?)
-    command(PCD8544_SETBIAS | 0x4);
+      // LCD bias select (4 is optimal?)
+      command(PCD8544_SETBIAS | 0x4, function () {
+        // set VOP
+        // if (contrast > 0x7f)
+        //   contrast = 0x7f;
 
-    // set VOP
-    // if (contrast > 0x7f)
-    //   contrast = 0x7f;
+        var contrast = 0x3a;
+        // Experimentally determined
+        command( PCD8544_SETVOP | contrast, function () {
+          // normal mode
+          command(PCD8544_FUNCTIONSET, function () {
 
-    var contrast = 0x7f;
-    command( PCD8544_SETVOP | contrast); // Experimentally determined
+            // Set display to Normal
+            command(PCD8544_DISPLAYCONTROL | PCD8544_DISPLAYNORMAL, function () {
+              // initial display line
+              // set page address
+              // set column address
+              // write display data
 
+              // set up a bounding box for screen updates
 
-    // normal mode
-    command(PCD8544_FUNCTIONSET);
+              updateBoundingBox(0, 0, LCDWIDTH-1, LCDHEIGHT-1);
 
-    // Set display to Normal
-    command(PCD8544_DISPLAYCONTROL | PCD8544_DISPLAYNORMAL);
-
-    // initial display line
-    // set page address
-    // set column address
-    // write display data
-
-    // set up a bounding box for screen updates
-
-    updateBoundingBox(0, 0, LCDWIDTH-1, LCDHEIGHT-1);
-
-    // Push out pcd8544_buffer to the Display (will show the AFI logo)
-    next && next(null, ret);
+              // Push out pcd8544_buffer to the Display (will show the AFI logo)
+              next && next(null, ret);
+            });
+          });
+        });
+      });
+    });
   }
 
   // the most basic function, set a single pixel
   function setPixel (x, y, color) {
-    x = x | 0;
-    y = y | 0;
-    if ((x < 0) || (x >= LCDWIDTH) || (y < 0) || (y >= LCDHEIGHT))
-      return;
-
-    // Get the byte we're writing to.
-    // Screen is structured as six rows (pages).
-    var col = x + (((y/8)*LCDWIDTH) | 0);
-    if (color) 
-      pcd8544_buffer[col] = pcd8544_buffer[col] | (1 << (y%8)); 
-    else
-      pcd8544_buffer[col] = pcd8544_buffer[col] ^ (1 << (y%8));
-
-    updateBoundingBox(x,y,x,y);
+    if (setScreenPixel(pcd8544_buffer, x, y, color)) {
+      updateBoundingBox(x, y, x, y);
+    }
   }
 
   // the most basic function, get a single pixel
@@ -131,24 +138,29 @@ exports.connect = function (next)
     if (ymax > yUpdateMax) yUpdateMax = ymax;
   }
 
-  function refreshSync (buffer) {
+  function refresh (buffer, next) {
+    if (typeof buffer == 'function') {
+      next = buffer;
+      buffer = null;
+    }
     buffer = buffer || pcd8544_buffer;
 
     cs.low();
     dc.low();
-    spi.send([PCD8544_SETYADDR | 0, PCD8544_SETXADDR | 0])
+    spi.send(new Buffer([PCD8544_SETYADDR | 0, PCD8544_SETXADDR | 0]), function () {
+      dc.high();
+      spi.send(buffer, function () {
+        cs.high();
 
-    dc.high();
-    spi.send(buffer);
-    cs.high();
-
-    command(PCD8544_SETYADDR);  // no idea why this is necessary but it is to finish the last byte?
+        command(PCD8544_SETYADDR, next);  // no idea why this is necessary but it is to finish the last byte?
+      });
+    });
   }
 
-  function refreshDirtySync (buffer) {
+  function refreshDirtySync (buffer, next) {
     buffer = buffer || pcd8544_buffer;
-    
-    cs.low();
+
+    var queue = new Queue();
     for (var p = 0; p < 6; p++) {
       // check if this page is part of update
       if (yUpdateMin >= ((p+1)*8)) {
@@ -158,20 +170,33 @@ exports.connect = function (next)
         break;
       }
 
-      dc.low();
-      spi.send([PCD8544_SETYADDR | p, PCD8544_SETXADDR | xUpdateMin])
-
-      dc.high();
-      spi.send(pcd8544_buffer.slice((LCDWIDTH*p)+xUpdateMin, (LCDWIDTH*p)+xUpdateMax))
+      queue.place(function (next) {
+        console.log('bump');
+        dc.low();
+        spi.send(new Buffer([PCD8544_SETYADDR | p, PCD8544_SETXADDR | xUpdateMin]), function () {
+          console.log([PCD8544_SETYADDR | p, PCD8544_SETXADDR | xUpdateMin]);
+          dc.high();
+          spi.send(pcd8544_buffer.slice((LCDWIDTH*p)+xUpdateMin, (LCDWIDTH*p)+xUpdateMax), next);
+        });
+      });
     }
-    cs.high();
 
-    command(PCD8544_SETYADDR);  // no idea why this is necessary but it is to finish the last byte?
 
-    xUpdateMin = LCDWIDTH - 1;
-    xUpdateMax = 0;
-    yUpdateMin = LCDHEIGHT-1;
-    yUpdateMax = 0;
+    cs.low();
+    queue.place(function () {
+      console.log('finished');
+      cs.high();
+
+      command(PCD8544_SETYADDR, function () {  // no idea why this is necessary but it is to finish the last byte?
+        xUpdateMin = LCDWIDTH - 1;
+        xUpdateMax = 0;
+        yUpdateMin = LCDHEIGHT-1;
+        yUpdateMax = 0;
+        next();
+      });
+    });
+
+    queue.next();
   }
 
   var ret = {
@@ -184,7 +209,7 @@ exports.connect = function (next)
     },
     getPixel: getPixel,
     setPixel: setPixel,
-    refreshSync: refreshSync,
+    refresh: refresh,
     refreshDirtySync: refreshDirtySync,
   };
 
@@ -193,3 +218,5 @@ exports.connect = function (next)
 
   return ret;
 }
+
+exports.setScreenPixel = setScreenPixel;

@@ -1,11 +1,15 @@
 var fs = require('fs');
+var tessel = require('tessel');
+var screenlib = require('../');
 
-require('../').connect(function (err, screen) {
+var fruit = new Buffer(fs.readFileSync('/app/test/adafruit.bin'));
+
+screenlib.use(tessel.port['A'], function (err, screen) {
 	console.log('Connected.');
 
 	// Overwrite buffer with Adafruit logo and display
-	screen.setBuffer(new Buffer(fs.readFileSync('/app/test/adafruit.bin')));
-	console.log('Loaded image.');
-	screen.refreshSync();
-	console.log('Displayed.');
+	screen.setBuffer(fruit1);
+	screen.refresh(function () {
+		console.log('Displayed.');
+	});
 })

@@ -1,7 +1,7 @@
 {
   "name": "screen-nokia5110",
-  "version": "0.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Library for Nokia 5110 screens.",
   "main": "index.js",
   "directories": {
     "test": "test"
@@ -10,5 +10,8 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "sync-queue": "0.0.1"
+  }
 }
